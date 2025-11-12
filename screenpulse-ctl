@@ -1,0 +1,254 @@
+#!/usr/bin/env bash
+# ScreenPulse Control Script
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCREENPULSE="${SCRIPT_DIR}/screenpulse.py"
+CONFIG_FILE="${SCRIPT_DIR}/screenpulse.conf"
+
+# Load configuration
+if [ -f "$CONFIG_FILE" ]; then
+    # Source config file
+    source "$CONFIG_FILE"
+else
+    # Defaults if no config file
+    OUTPUT_DIR="recordings"
+    LOG_FILE="screenpulse.log"
+    PID_FILE="screenpulse.pid"
+    MAX_DURATION=2400
+    IDLE_TIMEOUT=600
+    RESOLUTION="1280x720"
+    CRF=25
+fi
+
+# Make paths absolute if they're relative
+if [[ "$OUTPUT_DIR" != /* ]]; then
+    OUTPUT_DIR="${SCRIPT_DIR}/${OUTPUT_DIR}"
+fi
+if [[ "$LOG_FILE" != /* ]]; then
+    LOG_FILE="${SCRIPT_DIR}/${LOG_FILE}"
+fi
+if [[ "$PID_FILE" != /* ]]; then
+    PID_FILE="${SCRIPT_DIR}/${PID_FILE}"
+fi
+
+start() {
+    if [ -f "$PID_FILE" ]; then
+        PID=$(cat "$PID_FILE")
+        if kill -0 "$PID" 2>/dev/null; then
+            echo "ScreenPulse is already running (PID: $PID)"
+            return 1
+        else
+            echo "Removing stale PID file..."
+            rm -f "$PID_FILE"
+        fi
+    fi
+
+    # Create output directory if it doesn't exist
+    if [ ! -d "$OUTPUT_DIR" ]; then
+        echo "Creating output directory: $OUTPUT_DIR"
+        mkdir -p "$OUTPUT_DIR" || {
+            echo "ERROR: Failed to create output directory: $OUTPUT_DIR"
+            echo "Make sure the path is valid and you have write permissions."
+            return 1
+        }
+    fi
+
+    # Test if we can write to output directory
+    if [ ! -w "$OUTPUT_DIR" ]; then
+        echo "ERROR: Cannot write to output directory: $OUTPUT_DIR"
+        echo "Check permissions or mount status if using external drive."
+        return 1
+    fi
+
+    echo "Starting ScreenPulse in background..."
+    echo "Output directory: $OUTPUT_DIR"
+    echo "Log file: $LOG_FILE"
+
+    # Build arguments
+    ARGS="--daemon --output-dir '$OUTPUT_DIR' --log-file '$LOG_FILE' --pid-file '$PID_FILE'"
+    ARGS="$ARGS --max-duration $MAX_DURATION --idle-timeout $IDLE_TIMEOUT"
+    ARGS="$ARGS --resolution '$RESOLUTION' --crf $CRF"
+
+    # Run with nix-shell if in nix environment, otherwise run directly
+    # Preserve Wayland and X11 environment variables for pynput compatibility
+    export WAYLAND_DISPLAY="${WAYLAND_DISPLAY:-wayland-1}"
+    export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/1000}"
+    export DISPLAY="${DISPLAY:-:0}"
+
+    if command -v nix-shell &> /dev/null; then
+        cd "$SCRIPT_DIR" && nix-shell --keep WAYLAND_DISPLAY --keep XDG_RUNTIME_DIR --keep DISPLAY --extra-experimental-features 'nix-command flakes' --run "python3 '$SCREENPULSE' $ARGS" 2>&1
+    else
+        eval "python3 '$SCREENPULSE' $ARGS"
+    fi
+
+    sleep 1
+    if [ -f "$PID_FILE" ]; then
+        echo "ScreenPulse started successfully!"
+        echo "PID: $(cat $PID_FILE)"
+    else
+        echo "Failed to start ScreenPulse"
+        echo "Check the log file: $LOG_FILE"
+        return 1
+    fi
+}
+
+stop() {
+    if [ ! -f "$PID_FILE" ]; then
+        echo "ScreenPulse is not running (no PID file)"
+        return 1
+    fi
+
+    PID=$(cat "$PID_FILE")
+    if kill -0 "$PID" 2>/dev/null; then
+        echo "Stopping ScreenPulse (PID: $PID)..."
+        kill -TERM "$PID"
+        sleep 2
+
+        # Force kill if still running
+        if kill -0 "$PID" 2>/dev/null; then
+            echo "Force killing..."
+            kill -9 "$PID"
+        fi
+
+        rm -f "$PID_FILE"
+        echo "ScreenPulse stopped"
+    else
+        echo "Process not running, removing stale PID file"
+        rm -f "$PID_FILE"
+    fi
+}
+
+status() {
+    if [ -f "$PID_FILE" ]; then
+        PID=$(cat "$PID_FILE")
+        if kill -0 "$PID" 2>/dev/null; then
+            echo "ScreenPulse is running (PID: $PID)"
+            echo "Output directory: $OUTPUT_DIR"
+            echo "Log file: $LOG_FILE"
+
+            # Show disk usage if output dir exists
+            if [ -d "$OUTPUT_DIR" ]; then
+                echo ""
+                echo "Storage:"
+                du -sh "$OUTPUT_DIR" 2>/dev/null || echo "  Unable to check disk usage"
+                df -h "$OUTPUT_DIR" | tail -1 | awk '{print "  Available: " $4 " (" $5 " used)"}'
+            fi
+
+            # Show last few log lines
+            if [ -f "$LOG_FILE" ]; then
+                echo ""
+                echo "Recent activity:"
+                tail -n 5 "$LOG_FILE"
+            fi
+            return 0
+        else
+            echo "ScreenPulse is not running (stale PID file)"
+            return 1
+        fi
+    else
+        echo "ScreenPulse is not running"
+        return 1
+    fi
+}
+
+logs() {
+    if [ -f "$LOG_FILE" ]; then
+        tail -f "$LOG_FILE"
+    else
+        echo "No log file found at: $LOG_FILE"
+        return 1
+    fi
+}
+
+test_config() {
+    echo "Testing ScreenPulse configuration..."
+    echo "======================================"
+    echo ""
+    echo "Configuration file: $CONFIG_FILE"
+    echo "Output directory:   $OUTPUT_DIR"
+    echo "Log file:           $LOG_FILE"
+    echo "PID file:           $PID_FILE"
+    echo "Max duration:       $MAX_DURATION seconds ($((MAX_DURATION / 60)) minutes)"
+    echo "Idle timeout:       $IDLE_TIMEOUT seconds ($((IDLE_TIMEOUT / 60)) minutes)"
+    echo "Resolution:         $RESOLUTION"
+    echo "CRF quality:        $CRF"
+    echo ""
+
+    # Test output directory
+    echo "Testing output directory..."
+    if [ ! -d "$OUTPUT_DIR" ]; then
+        echo "  Creating: $OUTPUT_DIR"
+        mkdir -p "$OUTPUT_DIR" || {
+            echo "  ✗ FAILED: Cannot create directory"
+            return 1
+        }
+        echo "  ✓ Created successfully"
+    else
+        echo "  ✓ Directory exists"
+    fi
+
+    # Test write permissions
+    TEST_FILE="$OUTPUT_DIR/.test_write_$$"
+    if touch "$TEST_FILE" 2>/dev/null; then
+        rm -f "$TEST_FILE"
+        echo "  ✓ Write permission OK"
+    else
+        echo "  ✗ FAILED: No write permission"
+        return 1
+    fi
+
+    # Check available space
+    AVAILABLE=$(df -BG "$OUTPUT_DIR" | tail -1 | awk '{print $4}' | sed 's/G//')
+    echo "  ✓ Available space: ${AVAILABLE}GB"
+    if [ "$AVAILABLE" -lt 1 ]; then
+        echo "  ⚠ WARNING: Less than 1GB available"
+    fi
+
+    echo ""
+    echo "All tests passed! Configuration is valid."
+    echo ""
+    echo "To start ScreenPulse:"
+    echo "  $0 start"
+}
+
+restart() {
+    stop
+    sleep 2
+    start
+}
+
+case "${1:-}" in
+    start)
+        start
+        ;;
+    stop)
+        stop
+        ;;
+    restart)
+        restart
+        ;;
+    status)
+        status
+        ;;
+    logs)
+        logs
+        ;;
+    test)
+        test_config
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|restart|status|logs|test}"
+        echo ""
+        echo "Commands:"
+        echo "  start    - Start ScreenPulse in background"
+        echo "  stop     - Stop ScreenPulse"
+        echo "  restart  - Restart ScreenPulse"
+        echo "  status   - Check if ScreenPulse is running"
+        echo "  logs     - Follow log file"
+        echo "  test     - Test configuration and output directory"
+        echo ""
+        echo "Configuration:"
+        echo "  Edit $CONFIG_FILE to customize settings"
+        exit 1
+        ;;
+esac

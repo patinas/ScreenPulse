@@ -1,0 +1,38 @@
+# Runtime files
+screenpulse.pid
+screenpulse.log
+
+# Recordings directory
+recordings/
+*.mp4
+*.mkv
+
+# Nix build artifacts
+result
+result-*
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Virtual environments
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.temp
