@@ -1,0 +1,15 @@
+[Unit]
+Description=ScreenPulse Analyzer - AI Video Analysis Service
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/user/screenpulse/analyzer
+ExecStart=/usr/bin/python3 /home/user/screenpulse/analyzer/screenpulse-analyzer.py
+Restart=on-failure
+RestartSec=10
+StandardOutput=append:/home/user/screenpulse/analyzer/screenpulse-analyzer.log
+StandardError=append:/home/user/screenpulse/analyzer/screenpulse-analyzer.log
+
+[Install]
+WantedBy=default.target
