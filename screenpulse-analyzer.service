@@ -14,7 +14,6 @@ StandardError=append:/home/user/screenpulse/screenpulse.log
 # Environment
 Environment="PYTHONUNBUFFERED=1"
 Environment="PATH=/home/user/screenpulse/.venv/bin:/usr/bin:/bin"
-Environment="GEMINI_API_KEY=AIzaSyBA8ZU0IJvEqqIrJnzLmtF5yjxBGvBWXcw"
 
 [Install]
 WantedBy=default.target
