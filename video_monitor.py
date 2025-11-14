@@ -54,7 +54,12 @@ class VideoHandler(FileSystemEventHandler):
         logger.info(f"Video {event_type}: {file_path.name}")
 
         # Wait for file to be fully written
-        self._wait_for_stable_file(file_path)
+        try:
+            self._wait_for_stable_file(file_path)
+        except TimeoutError as e:
+            logger.error(f"Timeout waiting for file to stabilize: {e}")
+            logger.info(f"Skipping {file_path.name} - will be picked up by next scan")
+            return
 
         # Mark as processing
         self.processing.add(file_path)
@@ -62,17 +67,19 @@ class VideoHandler(FileSystemEventHandler):
         try:
             # Call the callback with the video path
             self.callback(file_path)
+        except Exception as e:
+            logger.error(f"Error processing {file_path.name}: {e}")
         finally:
             # Remove from processing set
             self.processing.discard(file_path)
 
-    def _wait_for_stable_file(self, file_path: Path, timeout: int = 600):
+    def _wait_for_stable_file(self, file_path: Path, timeout: int = 3000):
         """
         Wait for file to finish being written (recording stopped).
 
         Args:
             file_path: Path to the file
-            timeout: Maximum seconds to wait (default: 600s = 10 minutes)
+            timeout: Maximum seconds to wait (default: 3000s = 50 minutes)
 
         Raises:
             TimeoutError: If file doesn't stabilize within timeout
