@@ -69,6 +69,11 @@ start() {
     ARGS="$ARGS --max-duration $MAX_DURATION --idle-timeout $IDLE_TIMEOUT"
     ARGS="$ARGS --resolution '$RESOLUTION' --crf $CRF"
 
+    # Add auto-start flag if enabled
+    if [ "${AUTO_START,,}" = "true" ]; then
+        ARGS="$ARGS --auto-start"
+    fi
+
     # Run with nix-shell if in nix environment, otherwise run directly
     # Preserve Wayland and X11 environment variables for pynput compatibility
     export WAYLAND_DISPLAY="${WAYLAND_DISPLAY:-wayland-1}"

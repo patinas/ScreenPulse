@@ -24,7 +24,8 @@ class ScreenPulse:
                  max_duration=40 * 60,  # 40 minutes in seconds
                  idle_timeout=10 * 60,  # 10 minutes in seconds
                  resolution="1280x720",
-                 crf=25):  # Compression quality (18-28, lower = better quality/larger file)
+                 crf=25,  # Compression quality (18-28, lower = better quality/larger file)
+                 auto_start=False):  # Auto-start recording immediately
 
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -45,6 +46,7 @@ class ScreenPulse:
         self.idle_timeout = idle_timeout
         self.resolution = resolution
         self.crf = crf
+        self.auto_start = auto_start
 
         self.is_recording = False
         self.ffmpeg_process = None
@@ -53,6 +55,7 @@ class ScreenPulse:
         self.lock = Lock()
 
         self.current_filename = None
+        self.notification_id = None  # Track notification for dismissal
 
         self.logger.info("ScreenPulse initialized")
         self.logger.info(f"Output directory: {self.output_dir.absolute()}")
@@ -61,6 +64,29 @@ class ScreenPulse:
         self.logger.info(f"Idle timeout: {idle_timeout // 60} minutes")
         self.logger.info(f"Resolution: {resolution}")
         self.logger.info(f"Quality (CRF): {crf}")
+
+    def send_notification(self, message):
+        """Send desktop notification"""
+        try:
+            subprocess.run(
+                ['notify-send', '-t', '0', '-u', 'low', message],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL
+            )
+        except Exception as e:
+            self.logger.debug(f"Could not send notification: {e}")
+
+    def dismiss_notification(self):
+        """Dismiss active notification by sending empty notification"""
+        try:
+            # Send a brief notification that immediately expires to clear the previous one
+            subprocess.run(
+                ['notify-send', '-t', '1', '-u', 'low', ''],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL
+            )
+        except Exception as e:
+            self.logger.debug(f"Could not dismiss notification: {e}")
 
     def get_output_filename(self):
         """Generate timestamped filename"""
@@ -122,6 +148,8 @@ class ScreenPulse:
                 )
                 self.is_recording = True
                 self.logger.info(f"▶ Recording started: {self.current_filename.name}")
+                # Show red dot notification
+                self.send_notification("🔴")
             except FileNotFoundError as e:
                 self.logger.error(f"Recording tool not found. Please install ffmpeg or wf-recorder")
                 self.logger.error(f"Details: {e}")
@@ -148,6 +176,9 @@ class ScreenPulse:
 
             duration = int(time.time() - self.recording_start_time)
             self.is_recording = False
+
+            # Dismiss notification
+            self.dismiss_notification()
 
             # Get file size
             if self.current_filename.exists():
@@ -208,7 +239,10 @@ class ScreenPulse:
         """Main run loop"""
         self.logger.info("="*60)
         self.logger.info("ScreenPulse is running!")
-        self.logger.info("Move your mouse or press any key to start recording...")
+        if self.auto_start:
+            self.logger.info("Auto-start enabled - recording will begin immediately...")
+        else:
+            self.logger.info("Move your mouse or press any key to start recording...")
         self.logger.info("="*60)
 
         # Get input devices
@@ -224,9 +258,29 @@ class ScreenPulse:
         monitor_thread = Thread(target=self.monitor_recording, daemon=True)
         monitor_thread.start()
 
+        # Auto-start recording if enabled
+        if self.auto_start:
+            self.start_recording()
+
+        # Track last device refresh time for periodic re-detection
+        last_device_refresh = time.time()
+        device_refresh_interval = 30  # Refresh every 30 seconds to catch sleeping devices
+
         # Monitor input devices using evdev
         try:
             while True:
+                # Periodically refresh device list to catch devices that reconnect/wake from sleep
+                current_time = time.time()
+                if current_time - last_device_refresh >= device_refresh_interval:
+                    old_count = len(devices)
+                    devices = self.get_input_devices()
+                    new_count = len(devices)
+                    last_device_refresh = current_time
+
+                    if new_count != old_count:
+                        self.logger.info(f"Device change detected: {old_count} → {new_count} devices")
+                        self.logger.info(f"Now monitoring {new_count} input device(s)")
+
                 # Use select to wait for events on any device
                 r, w, x = select.select(devices, [], [], 1.0)
                 for device in r:
@@ -236,9 +290,13 @@ class ScreenPulse:
                             if event.type in (evdev.ecodes.EV_REL, evdev.ecodes.EV_KEY):
                                 self.on_input_activity()
                     except OSError as e:
-                        # Device was disconnected, refresh device list
+                        # Device was disconnected, refresh device list immediately
                         self.logger.warning(f"Device disconnected: {device.name}")
+                        old_count = len(devices)
                         devices = self.get_input_devices()
+                        new_count = len(devices)
+                        self.logger.info(f"Refreshed devices: {old_count} → {new_count}")
+                        last_device_refresh = current_time  # Reset refresh timer
                         break
         except KeyboardInterrupt:
             self.logger.info("Shutting down...")
@@ -320,6 +378,7 @@ def main():
     parser.add_argument('--idle-timeout', type=int, default=600, help='Idle timeout in seconds (default: 600 = 10 min)')
     parser.add_argument('--resolution', default='1280x720', help='Recording resolution (default: 1280x720)')
     parser.add_argument('--crf', type=int, default=25, help='Video quality CRF (18-28, lower = better, default: 25)')
+    parser.add_argument('--auto-start', action='store_true', help='Start recording immediately without waiting for user activity')
     args = parser.parse_args()
 
     # Daemonize if requested
@@ -333,7 +392,8 @@ def main():
         max_duration=args.max_duration,
         idle_timeout=args.idle_timeout,
         resolution=args.resolution,
-        crf=args.crf
+        crf=args.crf,
+        auto_start=args.auto_start
     )
 
     def signal_handler(sig, frame):
